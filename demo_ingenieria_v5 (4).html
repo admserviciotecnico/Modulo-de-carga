@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demo v5 — Módulo de Ingeniería (ERP Producción DCM)</title>
+<style>
+  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, 'Helvetica Neue', Arial, sans-serif; margin: 1.5rem; }
+  h1, h2 { margin: 0.2rem 0 0.8rem; }
+  .note { background:#f1f5f9; padding:0.75rem; border-radius:8px; }
+  label { font-weight: 600; }
+  input[type=file] { padding: .4rem; border:1px solid #cbd5e1; border-radius:8px; background:#fff; }
+  table { border-collapse: collapse; width: 100%; margin-top: 0.5rem; }
+  th, td { border: 1px solid #e5e7eb; padding: 8px; vertical-align: top; }
+  th { background: #f8fafc; text-align: left; }
+  .btn { padding: 6px 10px; border: 1px solid #cbd5e1; background: #fff; border-radius: 8px; cursor: pointer; }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .badge { display:inline-block; padding:2px 6px; border-radius:6px; background:#ecfeff; border:1px solid #a5f3fc; font-size:12px; }
+  details { background:#fafafa; border:1px solid #e5e7eb; padding: 0.5rem 0.75rem; border-radius: 8px; margin:0.5rem 0 1rem; }
+  .ops-table th, .ops-table td { border: 1px dashed #d1d5db; }
+  .hint { color:#64748b; font-size: 12px; }
+  .sticky-footer { position: sticky; bottom: 0; background: #ffffffd9; backdrop-filter: blur(6px); padding: 10px; border-top:1px solid #e5e7eb; display:flex; gap:.5rem; align-items:center; flex-wrap: wrap;}
+  .uploader { display:flex; gap:.5rem; align-items:center; flex-wrap: wrap; }
+  .section { margin: 0.5rem 0 1.25rem; }
+  .pill { display:inline-block; padding:2px 8px; border-radius:999px; background:#eef2ff; border:1px solid #c7d2fe; font-size:12px; }
+  .status { font-weight:600; }
+</style>
+</head>
+<body>
+<h1>Demo v5 — Crear nueva plantilla (BOM + Planos + Procesos)</h1>
+<p class="note">
+  Archivar planos DWG en: <strong>\\192.168.88.223\Ingeniería\Producción\06_Planos_para_fabricacion</strong><br>
+  <span class="hint">Esta demo no escribe en tu red; simula la carga y muestra el destino esperado.</span>
+</p>
+
+<div class="section">
+  <label for="bomFile">1) Importar BOM desde SolidWorks (.xls / .xlsx)</label>
+  <div class="uploader"><input id="bomFile" type="file" accept=".xls,.xlsx" /></div>
+  <div class="hint">No se cargarán columnas: <strong>Procesos</strong>, <strong>Tratamientos</strong>, <strong>Configuración</strong>, <strong>Ubicación</strong>.</div>
+  <div class="hint">Los procesos se toman del maestro interno embebido (Maestro de procesos ERP.xlsx).</div>
+</div>
+
+<section class="section">
+  <div style="display:flex; align-items:center; gap:.5rem;">
+    <h2 style="margin:0;">2) BOM</h2>
+    <span id="stateBadge" class="pill">Estado: <span class="status" id="stateText">EN_EDICIÓN</span></span>
+  </div>
+  <table id="bomTable" style="display:none;">
+    <thead id="bomHead"></thead>
+    <tbody id="bomBody"></tbody>
+  </table>
+</section>
+
+<div class="sticky-footer">
+  <button class="btn" id="btnLoadDraft">Cargar borrador</button>
+  <button class="btn" id="btnSaveDraft" disabled>Guardar (sin aprobar)</button>
+  <button class="btn" id="btnApprove" disabled>Aprobar (freezar)</button>
+  <span style="flex:1 1 auto;"></span>
+  <button class="btn" id="btnCSV" disabled>Exportar CSV</button>
+  <button class="btn" id="btnJSON" disabled>Exportar JSON</button>
+  <span class="hint" id="exportMsg"></span>
+</div>
+
+<!-- SheetJS for client-side Excel parsing -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script>
+const EXCLUDED_COLS = ['procesos','tratamientos','configuración','configuracion','ubicación','ubicacion'];
+const LS_KEY = 'erp_demo_plantilla_v5';
+const PROCESS_MASTER = {"COM": [{"name": "Abrir O/C Importar", "default_provider": "Compras importacion"}, {"name": "Abrir O/C Nacional", "default_provider": "Compras nacionales"}], "CHA": [{"name": "Corte x laser", "default_provider": "Laser chapa"}, {"name": "Plegado", "default_provider": "Plegado"}, {"name": "Perforado y roscado", "default_provider": "Mecanica"}, {"name": "Rebabado", "default_provider": "TODOS"}, {"name": "Stockear para soldadura", "default_provider": "TODOS"}, {"name": "Stockear para armado final", "default_provider": "TODOS"}, {"name": "Tratamiento Pintura", "default_provider": "Tecnoesmalte"}, {"name": "Tratamiento zincado", "default_provider": "Niquelado San Martin"}, {"name": "Tratamiento pavonado", "default_provider": "Mecanica"}], "MEC": [{"name": "Tornear", "default_provider": "Mecanica"}, {"name": "Fresar", "default_provider": "Mecanica"}, {"name": "Perforar", "default_provider": "Mecanica"}, {"name": "roscar", "default_provider": "Mecanica"}, {"name": "cortar", "default_provider": "Mecanica"}, {"name": "Stockear para soldadura", "default_provider": "TODOS"}, {"name": "Stockear para armado final", "default_provider": "TODOS"}, {"name": "Tratamiento Pintura", "default_provider": "Tecnoesmalte"}, {"name": "Tratamiento zincado", "default_provider": "Niquelado San Martin"}, {"name": "Tratamiento pavonado", "default_provider": "Mecanica"}, {"name": "Curvado o doblado de caños y perfiles", "default_provider": "Reyper"}], "INY": [{"name": "Inyectar plastico", "default_provider": "Moltec"}, {"name": "Inyectar con insertos", "default_provider": "Moltec"}, {"name": "Mecanizar", "default_provider": "Mecanica"}, {"name": "Stockear para armado final", "default_provider": "TODOS"}, {"name": "Tratamiento Pintura Plasticos", "default_provider": "Supercolor"}], "TER": [{"name": "Termoformar", "default_provider": "Vacumpac"}, {"name": "Mecanizar", "default_provider": "Mecanica"}, {"name": "Perforar y roscar", "default_provider": "Mecanica"}, {"name": "Stockear para armado final", "default_provider": "TODOS"}, {"name": "Tratamiento Pintura plasticos", "default_provider": "Supercolor"}], "PLA": [{"name": "Corte por laser plastico", "default_provider": "laser PLAST"}, {"name": "Perforar y roscar", "default_provider": "Mecanica"}, {"name": "Stockear para armado final", "default_provider": "TODOS"}, {"name": "Tratamiento Pintura", "default_provider": "Supercolor"}], "SOL": [{"name": "Rebabar", "default_provider": "Soldadura"}, {"name": "Soldar subconjunto", "default_provider": "Soldadura"}, {"name": "Soldar tornillos por proyeccion", "default_provider": "Soldadura"}, {"name": "Pulir", "default_provider": "Soldadura"}], "ARM": [{"name": "Armado mecanico", "default_provider": "Armado mecanico"}]};
+
+let BOM_DATA = [];
+let BOM_HEADERS = [];
+let APPROVED = false;
+let TIPO_KEY = null; // nombre de la columna que representa el tipo
+
+function setStateApproved(value) {
+  APPROVED = !!value;
+  document.getElementById('stateText').textContent = APPROVED ? 'APROBADA' : 'EN_EDICIÓN';
+  document.getElementById('btnApprove').disabled = APPROVED || !BOM_DATA.length;
+  document.getElementById('btnSaveDraft').disabled = APPROVED || !BOM_DATA.length;
+  document.getElementById('btnCSV').disabled = !BOM_DATA.length;
+  document.getElementById('btnJSON').disabled = !BOM_DATA.length;
+  document.querySelectorAll('input, select, button').forEach(el => {
+    const keep = ['btnCSV','btnJSON','btnLoadDraft','btnApprove','btnSaveDraft','bomFile'];
+    if (keep.includes(el.id)) return;
+    if (el === document.getElementById('bomFile')) return;
+    el.disabled = APPROVED;
+  });
+}
+
+function normalizeTypeCode(x) {
+  return String(x || '').trim().toUpperCase().replace(/[^A-Z]/g, '');
+}
+
+function readExcel(file, cb) {
+  const reader = new FileReader();
+  reader.onload = e => {
+    const data = new Uint8Array(e.target.result);
+    const wb = XLSX.read(data, { type: 'array' });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const json = XLSX.utils.sheet_to_json(ws, { defval:'', raw:false });
+    cb(json);
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+// --------- BOM IMPORT ---------
+document.getElementById('bomFile').addEventListener('change', (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  readExcel(f, (rows) => {
+    if (!rows.length) return;
+    const headers = Object.keys(rows[0]);
+    const filteredHeaders = headers.filter(h => !EXCLUDED_COLS.includes(h.toLowerCase()));
+    TIPO_KEY = filteredHeaders.find(h => h.toLowerCase().includes('tipo')) || null;
+    if (!TIPO_KEY) alert('Aviso: No se encontró la columna "tipo" en el BOM. (La demo intentará continuar)');
+    BOM_DATA = rows.map(r => {
+      const obj = {};
+      filteredHeaders.forEach(h => obj[h] = r[h]);
+      return obj;
+    }).slice(0, 200);
+    BOM_HEADERS = filteredHeaders;
+    renderBOM();
+    setStateApproved(false);
+  });
+});
+
+// --------- RENDER BOM ---------
+function renderBOM() {
+  const table = document.getElementById('bomTable');
+  const thead = document.getElementById('bomHead');
+  const tbody = document.getElementById('bomBody');
+  table.style.display = 'table';
+  thead.innerHTML = '';
+  tbody.innerHTML = '';
+
+  const trh = document.createElement('tr');
+  BOM_HEADERS.forEach(h => {
+    const th = document.createElement('th'); th.textContent = h; trh.appendChild(th);
+  });
+  trh.appendChild(thText('Plano (DWG)'));
+  trh.appendChild(thText('Procesos (hasta 10)'));
+  thead.appendChild(trh);
+
+  BOM_DATA.forEach((row, idx) => {
+    const tr = document.createElement('tr');
+    BOM_HEADERS.forEach(h => tr.appendChild(tdText(String(row[h] ?? ''))));
+
+    // DWG
+    const tdDWG = document.createElement('td');
+    const wrap = div('uploader');
+    const inp = el('input', { type:'file', accept:'.dwg' });
+    const note = span('hint', 'Destino: \\192.168.88.223\\Ingeniería\\Producción\\06_Planos_para_fabricacion');
+    wrap.appendChild(inp); wrap.appendChild(note);
+    tdDWG.appendChild(wrap);
+    tr.appendChild(tdDWG);
+
+    // Procesos
+    const tdOps = document.createElement('td');
+    const details = document.createElement('details');
+    const summary = document.createElement('summary');
+    const tipo = TIPO_KEY ? normalizeTypeCode(row[TIPO_KEY]) : '';
+    summary.innerHTML = 'Definir operaciones ' + (tipo ? `<span class="badge">Tipo: $ARM</span>` : '<span class="badge">Tipo: (no detectado)</span>');
+    details.appendChild(summary);
+
+    const tbl = el('table', { class:'ops-table' });
+    tbl.appendChild(htmlToEl('<thead><tr><th>Proceso</th><th>Proveedor (default)</th><th>—</th></tr></thead>'));
+    const tb = document.createElement('tbody');
+    tbl.appendChild(tb);
+    const btnAdd = button('Agregar operación', () => {
+      if (tb.children.length >= 10) return alert('Máximo de 10 operaciones por ítem');
+      tb.appendChild(opRow(idx, tipo));
+    });
+    details.appendChild(tbl);
+    details.appendChild(span('hint','Máximo 10 operaciones por ítem.'));
+    details.appendChild(btnAdd);
+    tdOps.appendChild(details);
+    tr.appendChild(tdOps);
+
+    tbody.appendChild(tr);
+  });
+
+  document.getElementById('btnSaveDraft').disabled = false;
+  document.getElementById('btnApprove').disabled = false;
+  document.getElementById('btnCSV').disabled = false;
+  document.getElementById('btnJSON').disabled = false;
+}
+
+function opRow(itemIdx, tipo) {
+  const tr = document.createElement('tr');
+
+  const tdProc = document.createElement('td');
+  const selProc = el('select', { 'data-role':'op-proc' });
+  selProc.appendChild(opt('', 'Seleccionar proceso'));
+
+  function populate() {
+    const list = (tipo && PROCESS_MASTER[tipo]) ? PROCESS_MASTER[tipo] : [];
+    selProc.innerHTML = '';
+    selProc.appendChild(opt('', 'Seleccionar proceso'));
+    list.forEach(p => {
+      const text = p.name;
+      const o = opt(p.name, text);
+      o.dataset.provider = p.default_provider || '';
+      selProc.appendChild(o);
+    });
+  }
+  populate();
+  tdProc.appendChild(selProc);
+
+  const tdProv = document.createElement('td');
+  const inpProv = el('input', { type:'text', placeholder:'Proveedor...' });
+  tdProv.appendChild(inpProv);
+
+  const tdAct = document.createElement('td');
+  const btnDel = button('Quitar', () => tr.remove());
+  tdAct.appendChild(btnDel);
+
+  selProc.addEventListener('change', () => {
+    const prov = selProc.selectedOptions[0]?.dataset?.provider || '';
+    if (prov) inpProv.value = prov;
+  });
+
+  tr.appendChild(tdProc);
+  tr.appendChild(tdProv);
+  tr.appendChild(tdAct);
+  return tr;
+}
+
+// Helpers
+function el(tag, attrs={}) { const e = document.createElement(tag); Object.entries(attrs).forEach(([k,v]) => e.setAttribute(k,v)); return e; }
+function thText(t) { const th = document.createElement('th'); th.textContent = t; return th; }
+function tdText(t) { const td = document.createElement('td'); td.textContent = t; return td; }
+function span(cls, t) { const s = document.createElement('span'); s.className = cls; s.textContent = t; return s; }
+function button(txt, onClick) { const b = document.createElement('button'); b.className='btn'; b.textContent = txt; b.addEventListener('click', (e)=>{e.preventDefault(); onClick();}); return b; }
+function div(cls) { const d = document.createElement('div'); d.className = cls; return d; }
+function opt(v, t) { const o = document.createElement('option'); o.value = v; o.textContent = t; return o; }
+function htmlToEl(html) { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstChild; }
+
+// Draft (localStorage)
+document.getElementById('btnSaveDraft').addEventListener('click', () => {
+  const data = { approved:false, items: collectData(), headers: BOM_HEADERS, tipoKey: TIPO_KEY };
+  localStorage.setItem(LS_KEY, JSON.stringify(data));
+  alert('Borrador guardado localmente. Podrás cargarlo luego con "Cargar borrador".');
+});
+document.getElementById('btnLoadDraft').addEventListener('click', () => {
+  const txt = localStorage.getItem(LS_KEY);
+  if (!txt) return alert('No hay borradores guardados.');
+  try {
+    const data = JSON.parse(txt);
+    BOM_HEADERS = data.headers || [];
+    TIPO_KEY = data.tipoKey || 'tipo';
+    BOM_DATA = (data.items || []).map(it => {
+      const { operations, dwg_filename, ...base } = it;
+      return base;
+    });
+    renderBOM();
+    const rows = document.querySelectorAll('#bomBody > tr');
+    (data.items || []).forEach((it, idx) => {
+      const tr = rows[idx];
+      if (!tr) return;
+      const note = tr.querySelector('.uploader .hint');
+      if (note && it.dwg_filename) note.textContent = note.textContent + ' | (DWG previo: ' + it.dwg_filename + ')';
+      const tipo = TIPO_KEY ? normalizeTypeCode(it[TIPO_KEY]) : '';
+      const tb = tr.querySelector('details tbody');
+      (it.operations || []).forEach(op => {
+        const r = opRow(idx, tipo);
+        tb.appendChild(r);
+        const sel = r.querySelector('select[data-role="op-proc"]');
+        const optEl = Array.from(sel.options).find(o => (o.text === op.process) || (o.value === op.process));
+        if (optEl) { sel.value = optEl.value; sel.dispatchEvent(new Event('change')); }
+        const prov = r.querySelector('input[type=text]');
+        if (prov) prov.value = op.provider || '';
+      });
+    });
+    setStateApproved(data.approved || false);
+  } catch(e) {
+    alert('Error al cargar borrador.');
+  }
+});
+
+// Approve (freeze)
+document.getElementById('btnApprove').addEventListener('click', () => {
+  if (!BOM_DATA.length) return;
+  if (!TIPO_KEY) {
+    if (!confirm('No se detectó columna "tipo". ¿Aprobar igualmente?')) return;
+  }
+  const result = collectData();
+  setStateApproved(true);
+  localStorage.setItem(LS_KEY, JSON.stringify({ approved:true, items: result, headers: BOM_HEADERS, tipoKey: TIPO_KEY }));
+  alert('Plantilla aprobada y freezada. (Modo demo: edición bloqueada)');
+});
+
+// Export
+document.getElementById('btnJSON').addEventListener('click', () => {
+  const payload = { exported_at: new Date().toISOString(), approved: APPROVED, items: collectData() };
+  download('plantilla_ingenieria_export.json', JSON.stringify(payload, null, 2), 'application/json');
+  document.getElementById('exportMsg').textContent = 'Exportado JSON (Descargas).';
+});
+document.getElementById('btnCSV').addEventListener('click', () => {
+  const items = collectData();
+  const { csv } = toCSV(items);
+  download('plantilla_ingenieria_export.csv', csv, 'text/csv');
+  document.getElementById('exportMsg').textContent = 'Exportado CSV (Descargas).';
+});
+
+function collectData() {
+  const out = [];
+  const rows = document.querySelectorAll('#bomBody > tr');
+  rows.forEach((tr, idx) => {
+    const base = { ...BOM_DATA[idx] };
+    const dwg = tr.querySelector('input[type=file]');
+    base.dwg_filename = (dwg && dwg.files[0]) ? dwg.files[0].name : '';
+    const ops = [];
+    tr.querySelectorAll('details tbody tr').forEach((r, i) => {
+      const pSel = r.querySelector('select[data-role="op-proc"]');
+      const p = pSel ? pSel.options[pSel.selectedIndex]?.text || '' : '';
+      const prov = r.querySelector('input[type=text]')?.value || '';
+      if (p || prov) ops.push({ process: p, provider: prov });
+    });
+    base.operations = ops;
+    out.push(base);
+  });
+  return out;
+}
+
+function toCSV(items) {
+  const baseCols = Object.keys(items[0] || {}).filter(k => k !== 'operations' && k !== 'dwg_filename');
+  const headers = [...baseCols, 'dwg_filename', 'op_index', 'op_process', 'op_provider'];
+  const lines = [headers.join(',')];
+  items.forEach(it => {
+    if (!it.operations || !it.operations.length) {
+      lines.push([...baseCols.map(k => esc(it[k]??'')), esc(it.dwg_filename||''), '', '', ''].join(','));
+    } else {
+      it.operations.forEach((op, i) => {
+        lines.push([...baseCols.map(k => esc(it[k]??'')), esc(it.dwg_filename||''), i, esc(op.process||''), esc(op.provider||'')].join(','));
+      });
+    }
+  });
+  return { csv: lines.join('\n'), headers };
+}
+function esc(v){ return JSON.stringify(String(v)); }
+
+function download(filename, data, mime) {
+  const blob = new Blob([data], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  setTimeout(()=>URL.revokeObjectURL(url), 1000);
+}
+</script>
+</body>
+</html>
