@@ -29,10 +29,13 @@ from pydantic import BaseModel, Field
 
 # ─── Configuración ────────────────────────────────────────────────────────────
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql://postgres:postgres@localhost:5432/erp_dcm"
-)
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+async def get_pool():
+    return await asyncpg.create_pool(
+        DATABASE_URL,
+        ssl="require"  # 🔥 CLAVE para Neon
+    )
 
 # Ruta base donde se guardarán los DWG en el servidor de archivos.
 # En producción apuntar a la UNC: \\192.168.88.223\Ingeniería\Producción\06_Planos_para_fabricacion
